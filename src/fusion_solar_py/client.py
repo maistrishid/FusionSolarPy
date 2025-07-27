@@ -1,3 +1,5 @@
+# https://uni005eu5.fusionsolar.huawei.com/rest/pvms/web/station/v3/overview/energy-balance?stationDn=NE%3D177071349&timeDim=2&timeZone=4.0&timeZoneStr=Asia%2FTbilisi&queryTime=1752955200000&dateStr=2025-07-20%2000%3A00%3A00&_=1753039249172
+# https://uni005eu5.fusionsolar.huawei.com/rest/pvms/web/device/v1/batch-device-history-data?showDst=true&deviceDns=NE=177071616&deviceDns=NE=177071617&deviceDns=NE=177071619&signalIds=30002&date=1753054177450&_=1753039784758
 """Client library to the fusion solar API"""
 
 import logging
@@ -625,6 +627,7 @@ class FusionSolarClient:
         for device in device_data["data"]:
             devices += [dict(type=device["mocTypeName"], deviceDn=device["dn"])]
         return devices
+
     @logged_in
     def get_historical_data(self, signal_ids: list[str] = ['30014', '30016', '30017'], device_dn:str = None, date: datetime = datetime.now() ) -> dict:
         """retrieves historical data for specified signals and device
@@ -651,6 +654,37 @@ class FusionSolarClient:
         r.raise_for_status()
 
         return r.json(parse_float=_parse_float)
+
+    @logged_in
+    def get_historical_data_batch(
+        self, 
+        signal_ids: list[str] = ['30014', '30016', '30017'], 
+        device_dns:list[str] = [], 
+        date: datetime = datetime.now(), 
+        batch_size: int = 20,
+    ) -> dict:
+        """
+        Retrieves historical data for multiple devices and specified signals.
+        Devices grouped in batches with maximum size of 20.
+        """
+        result = {}
+        for i in range(0, len(device_dns), batch_size):
+            url = f"https://{self._huawei_subdomain}.fusionsolar.huawei.com/rest/pvms/web/device/v1/batch-device-history-data"
+            params = ()
+            for signal_id in signal_ids:
+                params += (("signalIds", signal_id),)
+            for device_dn in device_dns[i:i + batch_size]:
+                params += (("deviceDns", device_dn),)
+            params += (
+                ("date", int(date.timestamp() * 1000)),
+                ("_", round(time.time() * 1000)),
+            )
+            r = self._session.get(url=url, params=params)
+            r.raise_for_status()
+            r = r.json(parse_float=_parse_float)
+            result.update(r['data'])
+
+        return result
 
     @logged_in
     def get_real_time_data(self, device_dn: str = None) -> dict:
@@ -895,30 +929,27 @@ class FusionSolarClient:
 
     @logged_in
     def get_plant_stats(
-        self, plant_id: str, query_time: int = None
+        self, plant_id: str, date: datetime = datetime.now(), version='v1' 
     ) -> dict:
-        """Retrieves the complete plant usage statistics for the current day.
+        """Retrieves the complete plant usage statistics for secected day.
         :param plant_id: The plant's id
         :type plant_id: str
-        :param query_time: If set, must be set to 00:00:00 of the day the data should
-                           be fetched for. If not set, retrieves the data for the
+        :param date: Day the data should be fetched for. If not set, retrieves the data for the
                            current day.
-        :type query_time: int
+        :type date: datetime
+        :param version: api endpoint version. Tested possible options are 'v1' and 'v3'
+        :type version: str
         :return: _description_
         """
-        # set the query time to today
-        if not query_time:
-            query_time = self._get_day_start_sec()
 
         r = self._session.get(
-            url=f"https://{self._huawei_subdomain}.fusionsolar.huawei.com/rest/pvms/web/station/v1/overview/energy-balance",
+            url=f"https://{self._huawei_subdomain}.fusionsolar.huawei.com/rest/pvms/web/station/{version}/overview/energy-balance",
             params={
                 "stationDn": plant_id,
                 "timeDim": 2,
-                "queryTime": query_time, # TODO: this may have changed to micro-seconds ie. timestamp * 1000
-                # dateTime=2024-03-07 00:00:00
                 "timeZone": 2,  # 1 in no daylight
-                "timeZoneStr": "Europe/Vienna",
+                "dateStr": date.strftime("%Y-%m-%d %H:%M:%S"),
+                "queryTime": int(date.timestamp())*1000,
                 "_": round(time.time() * 1000),
             },
         )
@@ -930,7 +961,6 @@ class FusionSolarClient:
                 f"Failed to retrieve plant status for {plant_id}"
             )
 
-        # return the plant data
         return plant_data["data"]
 
     def get_last_plant_data(self, plant_data: dict) -> dict:
